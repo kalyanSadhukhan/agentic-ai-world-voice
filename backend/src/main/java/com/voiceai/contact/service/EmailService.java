@@ -22,14 +22,23 @@ public class EmailService {
     private JavaMailSender mailSender;
 
     @Value("${spring.mail.username}")
-    private String toEmail; // Send to ourselves
+    private String senderEmail; // Authentication email used to send
+
+    @Value("${RECEIVER_EMAIL:${spring.mail.username}}")
+    private String toEmail; // Inbox receiving the notifications
 
     public void sendContactEmail(ContactFormRequest request) {
         try {
             MimeMessage message = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
             
-            helper.setFrom(new InternetAddress(toEmail, "Website Contact"));
+            String senderName = (request.getName() != null && !request.getName().trim().isEmpty())
+                    ? request.getName().trim()
+                    : "User";
+            if (senderName.length() > 50) {
+                senderName = senderName.substring(0, 50);
+            }
+            helper.setFrom(new InternetAddress(senderEmail, senderName + " via Application"));
             helper.setTo(toEmail);
             
             String safeName = (request.getName() != null && !request.getName().isEmpty()) ? request.getName() : "Unknown";
@@ -53,7 +62,13 @@ public class EmailService {
             MimeMessage message = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
             
-            helper.setFrom(new InternetAddress(toEmail, "Website Contact"));
+            String senderName = (request.getName() != null && !request.getName().trim().isEmpty())
+                    ? request.getName().trim()
+                    : "User";
+            if (senderName.length() > 50) {
+                senderName = senderName.substring(0, 50);
+            }
+            helper.setFrom(new InternetAddress(senderEmail, senderName + " via Application"));
             helper.setTo(toEmail);
             
             String safeName = (request.getName() != null && !request.getName().isEmpty()) ? request.getName() : "Unknown";
