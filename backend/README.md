@@ -78,6 +78,7 @@ Handles complex interactions requesting specific AI integrations.
    SMTP_PORT=587
    EMAIL_USER=your_gmail_address@gmail.com
    EMAIL_PASS=your_google_app_password
+   RECEIVER_EMAIL=your_receiver_email@domain.com
    ```
 
 ---
