@@ -1,0 +1,22 @@
+Example 1: END intent
+User: "मुझे बस इतना ही जानना था, धन्यवाद"
+Intent: END
+Action: Return closing message "धन्यवाद, आपका दिन शुभ हो!"
+State remains untouched.
+
+Example 2: SLOT FILLING OVERRIDES INTENT
+Bot: "आप किस तारीख को अपॉइंटमेंट लेना चाहते हैं?" (lastAskedField = date)
+User: "कल"
+Intent Output: UNCLEAR or PROVIDE_INFO
+Failsafe: Since lastAskedField is set and intent isn't END, SOFT_END, or ASK_QUERY, it forces intent to PROVIDE_INFO.
+Action: Extracts "कल" as date using Entity Extraction.
+
+Example 3: QUERY intent
+User: "कब है मेरा अपॉइंटमेंट?"
+Intent: ASK_QUERY
+Action: Returns "आपका अपॉइंटमेंट [date] को [time] [department] विभाग में बुक है।"
+
+Example 4: SOFT_END intent
+User: "एक मिनट रुको"
+Intent: SOFT_END
+Action: Return "ठीक है, मैं इंतज़ार कर रही हूँ।"

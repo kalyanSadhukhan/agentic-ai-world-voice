@@ -10,7 +10,9 @@ export interface EnhancedFormData extends ContactFormData {
   agentTypes: string[];
 }
 
-const API_BASE_URL = 'http://localhost:8081/api/contact';
+const API_BASE_URL = import.meta.env.VITE_API_URL 
+  ? `${import.meta.env.VITE_API_URL}/api/contact` 
+  : 'http://localhost:8081/api/contact';
 
 export const sendContactEmail = async (formData: ContactFormData): Promise<void> => {
   try {

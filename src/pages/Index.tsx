@@ -5,6 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useState } from "react";
 import { toast } from "sonner";
 import EnhancedInquiryForm from "@/components/EnhancedInquiryForm";
+import VoiceDemoModal from "@/components/VoiceDemoModal";
 import { sendContactEmail } from "@/services/emailService";
 
 const Index = () => {
@@ -16,6 +17,7 @@ const Index = () => {
   });
 
   const [showEnhancedForm, setShowEnhancedForm] = useState(false);
+  const [showVoiceDemo, setShowVoiceDemo] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -66,7 +68,12 @@ const Index = () => {
               >
                 Get Started Today
               </Button>
-              <Button variant="outline" size="lg" className="border-blue-600 text-blue-600 hover:bg-blue-50 px-8 py-4 text-lg">
+              <Button 
+                variant="outline" 
+                size="lg" 
+                className="border-blue-600 text-blue-600 hover:bg-blue-50 px-8 py-4 text-lg"
+                onClick={() => setShowVoiceDemo(true)}
+              >
                 See Demo
               </Button>
             </div>
@@ -407,9 +414,12 @@ const Index = () => {
         </div>
       </footer>
 
-      {/* Enhanced Inquiry Form Modal */}
       {showEnhancedForm && (
         <EnhancedInquiryForm onClose={() => setShowEnhancedForm(false)} />
+      )}
+      
+      {showVoiceDemo && (
+        <VoiceDemoModal onClose={() => setShowVoiceDemo(false)} />
       )}
     </div>
   );
