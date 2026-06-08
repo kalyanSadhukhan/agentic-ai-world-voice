@@ -1,6 +1,5 @@
-package com.voiceai.contact.service;
+package com.voiceai.contact.service.session;
 
-import com.voiceai.contact.model.SessionState;
 import org.springframework.stereotype.Service;
 
 import java.util.UUID;

@@ -11,23 +11,48 @@ import jakarta.mail.internet.MimeMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.web.client.RestTemplate;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 
 @Service
 public class EmailService {
 
-    @Autowired
+    @Autowired(required = false)
     private JavaMailSender mailSender;
 
-    @Value("${spring.mail.username}")
+    @Value("${spring.mail.username:}")
     private String senderEmail; // Authentication email used to send
 
-    @Value("${RECEIVER_EMAIL:${spring.mail.username}}")
+    @Value("${RECEIVER_EMAIL:${spring.mail.username:}}")
     private String toEmail; // Inbox receiving the notifications
 
+    @Value("${RESEND_API_KEY:}")
+    private String resendApiKey;
+
     public void sendContactEmail(ContactFormRequest request) {
+        String safeName = (request.getName() != null && !request.getName().isEmpty()) ? request.getName() : "Unknown";
+        String safeForm = (request.getSubmittedFrom() != null && !request.getSubmittedFrom().isEmpty()) ? request.getSubmittedFrom() : "Website";
+        String subject = "New Inquiry from " + safeName + " (" + safeForm + ")";
+        String htmlBody = buildHtmlEmailBody(request.getName(), request.getEmail(), null, request.getCompany(), null, null, request.getMessage(), request.getSubmittedFrom());
+        String replyTo = (request.getEmail() != null && request.getEmail().contains("@") && request.getEmail().contains(".")) ? request.getEmail() : null;
+
+        if (resendApiKey != null && !resendApiKey.trim().isEmpty()) {
+            sendViaResend(subject, htmlBody, replyTo);
+            return;
+        }
+
+        // SMTP fallback
+        if (mailSender == null) {
+            throw new RuntimeException("Neither Resend API Key nor JavaMailSender is configured.");
+        }
         try {
             MimeMessage message = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
@@ -40,24 +65,36 @@ public class EmailService {
             }
             helper.setFrom(new InternetAddress(senderEmail, senderName + " via Application"));
             helper.setTo(toEmail);
-            
-            String safeName = (request.getName() != null && !request.getName().isEmpty()) ? request.getName() : "Unknown";
-            String safeForm = (request.getSubmittedFrom() != null && !request.getSubmittedFrom().isEmpty()) ? request.getSubmittedFrom() : "Website";
-            helper.setSubject("New Inquiry from " + safeName + " (" + safeForm + ")");
-            
-            helper.setText(buildHtmlEmailBody(request.getName(), request.getEmail(), null, request.getCompany(), null, null, request.getMessage(), request.getSubmittedFrom()), true);
-            
-            if (request.getEmail() != null && request.getEmail().contains("@") && request.getEmail().contains(".")) {
-                helper.setReplyTo(request.getEmail());
+            helper.setSubject(subject);
+            helper.setText(htmlBody, true);
+            if (replyTo != null) {
+                helper.setReplyTo(replyTo);
             }
-            
             mailSender.send(message);
         } catch (MessagingException | UnsupportedEncodingException e) {
-            throw new RuntimeException("Failed to send contact email", e);
+            throw new RuntimeException("Failed to send contact email via SMTP", e);
         }
     }
 
     public void sendEnhancedInquiryEmail(EnhancedFormRequest request) {
+        String safeName = (request.getName() != null && !request.getName().isEmpty()) ? request.getName() : "Unknown";
+        String safeForm = (request.getSubmittedFrom() != null && !request.getSubmittedFrom().isEmpty()) ? request.getSubmittedFrom() : "Website";
+        String subject = "New Inquiry from " + safeName + " (" + safeForm + ")";
+        String agentTypes = (request.getAgentTypes() != null && !request.getAgentTypes().isEmpty()) 
+                ? String.join(", ", request.getAgentTypes()) 
+                : null;
+        String htmlBody = buildHtmlEmailBody(request.getName(), request.getEmail(), null, request.getCompany(), request.getPrimaryGoal(), agentTypes, request.getMessage(), request.getSubmittedFrom());
+        String replyTo = (request.getEmail() != null && request.getEmail().contains("@") && request.getEmail().contains(".")) ? request.getEmail() : null;
+
+        if (resendApiKey != null && !resendApiKey.trim().isEmpty()) {
+            sendViaResend(subject, htmlBody, replyTo);
+            return;
+        }
+
+        // SMTP fallback
+        if (mailSender == null) {
+            throw new RuntimeException("Neither Resend API Key nor JavaMailSender is configured.");
+        }
         try {
             MimeMessage message = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
@@ -70,24 +107,44 @@ public class EmailService {
             }
             helper.setFrom(new InternetAddress(senderEmail, senderName + " via Application"));
             helper.setTo(toEmail);
-            
-            String safeName = (request.getName() != null && !request.getName().isEmpty()) ? request.getName() : "Unknown";
-            String safeForm = (request.getSubmittedFrom() != null && !request.getSubmittedFrom().isEmpty()) ? request.getSubmittedFrom() : "Website";
-            helper.setSubject("New Inquiry from " + safeName + " (" + safeForm + ")");
-            
-            String agentTypes = (request.getAgentTypes() != null && !request.getAgentTypes().isEmpty()) 
-                    ? String.join(", ", request.getAgentTypes()) 
-                    : null;
-            
-            helper.setText(buildHtmlEmailBody(request.getName(), request.getEmail(), null, request.getCompany(), request.getPrimaryGoal(), agentTypes, request.getMessage(), request.getSubmittedFrom()), true);
-            
-            if (request.getEmail() != null && request.getEmail().contains("@") && request.getEmail().contains(".")) {
-                helper.setReplyTo(request.getEmail());
+            helper.setSubject(subject);
+            helper.setText(htmlBody, true);
+            if (replyTo != null) {
+                helper.setReplyTo(replyTo);
             }
-            
             mailSender.send(message);
         } catch (MessagingException | UnsupportedEncodingException e) {
-            throw new RuntimeException("Failed to send enhanced inquiry email", e);
+            throw new RuntimeException("Failed to send enhanced inquiry email via SMTP", e);
+        }
+    }
+
+    private void sendViaResend(String subject, String htmlBody, String replyTo) {
+        try {
+            RestTemplate restTemplate = new RestTemplate();
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.setBearerAuth(resendApiKey);
+
+            Map<String, Object> body = new HashMap<>();
+            
+            // If senderEmail is configured with a custom domain, use it. Otherwise, default to sandbox onboarding.
+            String fromAddress = (senderEmail != null && senderEmail.contains("@"))
+                    ? "AI Voice Agent Form <" + senderEmail + ">"
+                    : "AI Voice Agent Form <onboarding@resend.dev>";
+            body.put("from", fromAddress);
+            
+            body.put("to", Collections.singletonList(toEmail));
+            body.put("subject", subject);
+            body.put("html", htmlBody);
+            
+            if (replyTo != null) {
+                body.put("reply_to", replyTo);
+            }
+
+            HttpEntity<Map<String, Object>> entity = new HttpEntity<>(body, headers);
+            restTemplate.postForEntity("https://api.resend.com/emails", entity, String.class);
+        } catch (Exception e) {
+            throw new RuntimeException("Resend API failed to send email: " + e.getMessage(), e);
         }
     }
 

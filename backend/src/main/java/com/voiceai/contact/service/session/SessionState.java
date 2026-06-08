@@ -1,4 +1,4 @@
-package com.voiceai.contact.model;
+package com.voiceai.contact.service.session;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -6,7 +6,6 @@ import java.util.List;
 import java.util.Map;
 
 public class SessionState {
-    public enum Mode { BOOKING, CONFIRMATION, QUERY, POST_CONFIRM, RESCHEDULE, END }
 
     private String sessionId;
     private String patientName;
@@ -15,15 +14,15 @@ public class SessionState {
     private String time;
     private String assignedDoctor;
     private boolean confirmed;
-    private boolean greetingDone;   // true once the opening greeting has been sent
+    private boolean greetingDone;
     private String lastAskedField;
-    private int repeatCount;        // how many consecutive turns the same question has been asked
-    private Mode mode;
+    private int repeatCount;
+    private ConversationStage stage;
     private List<Map<String, String>> messageHistory;
 
     public SessionState(String sessionId) {
         this.sessionId = sessionId;
-        this.mode = Mode.BOOKING;
+        this.stage = ConversationStage.WELCOME;
         this.messageHistory = new ArrayList<>();
         this.greetingDone = false;
         this.repeatCount = 0;
@@ -57,7 +56,6 @@ public class SessionState {
     public void incrementRepeatCount() { this.repeatCount++; }
     public void resetRepeatCount() { this.repeatCount = 0; }
 
-    /** Resets repeatCount automatically when the field being asked changes. */
     public String getLastAskedField() { return lastAskedField; }
     public void setLastAskedField(String newField) {
         if (newField == null || !newField.equals(this.lastAskedField)) {
@@ -66,8 +64,8 @@ public class SessionState {
         this.lastAskedField = newField;
     }
 
-    public Mode getMode() { return mode; }
-    public void setMode(Mode mode) { this.mode = mode; }
+    public ConversationStage getStage() { return stage; }
+    public void setStage(ConversationStage stage) { this.stage = stage; }
 
     public List<Map<String, String>> getMessageHistory() { return messageHistory; }
 

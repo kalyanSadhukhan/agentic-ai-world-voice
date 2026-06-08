@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class LlmExtractionResponse {
+    private String intent;
     private String name;
     private String department;
     private String date;
@@ -12,6 +13,9 @@ public class LlmExtractionResponse {
     private Boolean isOutOfScope;
     private Boolean isQuerying;
     private String reply;
+
+    public String getIntent() { return intent; }
+    public void setIntent(String intent) { this.intent = intent; }
 
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
