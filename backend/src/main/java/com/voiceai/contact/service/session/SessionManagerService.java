@@ -15,6 +15,7 @@ public class SessionManagerService {
             String newSessionId = UUID.randomUUID().toString();
             SessionState newState = new SessionState(newSessionId);
             activeSessions.put(newSessionId, newState);
+            System.out.println("[SESSION CREATED]");
             return newState;
         }
         return activeSessions.get(sessionId);

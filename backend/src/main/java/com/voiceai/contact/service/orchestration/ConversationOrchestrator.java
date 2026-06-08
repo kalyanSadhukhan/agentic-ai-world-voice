@@ -12,6 +12,8 @@ import com.voiceai.contact.service.session.SessionManagerService;
 import com.voiceai.contact.service.session.SessionState;
 import com.voiceai.contact.service.speech.SpeechToTextService;
 import com.voiceai.contact.service.speech.TextToSpeechService;
+import com.voiceai.contact.service.speech.SpeechTextFormatter;
+import com.voiceai.contact.service.session.GreetingService;
 import com.voiceai.contact.service.util.ConversationUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -43,6 +45,8 @@ public class ConversationOrchestrator {
     private final DateParserService dateParserService;
     private final TimeParserService timeParserService;
     private final NameParserService nameParserService;
+    private final GreetingService greetingService;
+    private final SpeechTextFormatter speechTextFormatter;
 
     public ConversationOrchestrator(
             SpeechToTextService speechToTextService,
@@ -60,7 +64,9 @@ public class ConversationOrchestrator {
             DepartmentParserService departmentParserService,
             DateParserService dateParserService,
             TimeParserService timeParserService,
-            NameParserService nameParserService) {
+            NameParserService nameParserService,
+            GreetingService greetingService,
+            SpeechTextFormatter speechTextFormatter) {
         this.speechToTextService = speechToTextService;
         this.textToSpeechService = textToSpeechService;
         this.entityExtractionService = entityExtractionService;
@@ -77,15 +83,28 @@ public class ConversationOrchestrator {
         this.dateParserService = dateParserService;
         this.timeParserService = timeParserService;
         this.nameParserService = nameParserService;
+        this.greetingService = greetingService;
+        this.speechTextFormatter = speechTextFormatter;
     }
 
     public VoiceResponse processVoice(MultipartFile audio, String sessionId) throws Exception {
+        long requestStart = System.currentTimeMillis();
+        System.out.println("[PERF] Audio upload received at " + requestStart);
+
+        long sttDuration = 0;
+        long ruleDuration = 0;
+        long llmDuration = 0;
+        long nlgDuration = 0;
+        long ttsDuration = 0;
+
         SessionState state = sessionManagerService.getOrCreateSession(sessionId);
         if (sarvamApiKey == null || sarvamApiKey.isEmpty() || groqApiKey == null || groqApiKey.isEmpty()) {
             throw new Exception("API keys are missing in the environment configuration.");
         }
 
         // 1. Transcription (STT)
+        System.out.println("[PERF] Sarvam STT request started");
+        long sttStart = System.currentTimeMillis();
         String transcription;
         try {
             transcription = speechToTextService.transcribeAudio(audio);
@@ -93,52 +112,138 @@ public class ConversationOrchestrator {
             System.err.println("Failed STT: " + e.getMessage());
             transcription = "नमस्ते, यह एक टेस्ट है।";
         }
+        sttDuration = System.currentTimeMillis() - sttStart;
+        System.out.println("[PERF] Sarvam STT response received in " + sttDuration + " ms");
 
-        if (transcription == null || transcription.trim().isEmpty()) {
-            String fallbackMsg = "मुझे आपकी आवाज़ सुनाई नहीं दी। कृपया फिर से प्रयास करें।";
-            return new VoiceResponse("", fallbackMsg, textToSpeechService.synthesizeSpeech(fallbackMsg), false, state.getSessionId());
+        // Normalize transcription if present
+        if (transcription != null) {
+            transcription = ConversationUtils.normalizeTranscription(transcription);
         }
 
-        // 2. Normalization
-        transcription = ConversationUtils.normalizeTranscription(transcription);
-        String cleanText = transcription.replaceAll("[।.,!?\\s]+", "").trim();
-        String cTextCheck = transcription.toLowerCase().trim();
-        boolean hasNegation = cTextCheck.contains("नहीं") || cTextCheck.contains("मत") || cTextCheck.contains("ना ");
-
-        // 3. Agent-Initiated Greeting (First turn check)
+        // 2. Greeting check - must run first on new sessions to prevent empty audio bypassing the welcome greeting
         if (!state.isGreetingDone()) {
+            System.out.println("[NEW SESSION DETECTED]");
             state.setGreetingDone(true);
-            state.appendMessage("user", transcription);
+            state.appendMessage("user", transcription != null ? transcription : "");
             
             // Try to extract department deterministically from the first utterance
-            String initialDept = departmentParserService.parseDepartment(transcription);
+            String initialDept = (transcription != null && !transcription.trim().isEmpty()) 
+                    ? departmentParserService.parseDepartment(transcription) 
+                    : null;
+            
             if (initialDept != null) {
                 state.setDepartment(initialDept);
                 state.setStage(ConversationStage.COLLECT_NAME);
                 state.setLastAskedField("name");
-                String promptMsg = "Kripya apna naam batayiye.";
+                String promptMsg = "कृपया अपना नाम बताइए।";
                 state.appendMessage("assistant", promptMsg);
-                return new VoiceResponse(transcription, promptMsg, textToSpeechService.synthesizeSpeech(promptMsg), false, state.getSessionId());
+                
+                String formattedPrompt = speechTextFormatter.formatForHindiTts(promptMsg);
+                System.out.println("[PERF] Sarvam TTS request started");
+                long ttsStart = System.currentTimeMillis();
+                String audioBase64 = textToSpeechService.synthesizeSpeech(formattedPrompt);
+                ttsDuration = System.currentTimeMillis() - ttsStart;
+                System.out.println("[PERF] Sarvam TTS response received in " + ttsDuration + " ms");
+                
+                long totalDuration = System.currentTimeMillis() - requestStart;
+                System.out.println("[PERF] Total request duration = " + totalDuration + " ms");
+                
+                System.out.println("[PERF] STT = " + sttDuration + " ms");
+                System.out.println("[PERF] RULE_ENGINE = " + ruleDuration + " ms");
+                System.out.println("[PERF] LLM = " + (llmDuration + nlgDuration) + " ms");
+                System.out.println("[PERF] TTS = " + ttsDuration + " ms");
+                System.out.println("[PERF] TOTAL = " + totalDuration + " ms");
+                
+                return new VoiceResponse(transcription, promptMsg, audioBase64, false, state.getSessionId());
             }
 
             // Normal welcome greeting if no department provided
             state.setStage(ConversationStage.COLLECT_NAME);
             state.setLastAskedField("name");
-            String greetMsg = "Welcome to VoiceAiAgentPro. Main aapka appointment assistant hoon. Kripya bataiye main aapki kaise sahayata kar sakta hoon.";
+            
+            String greetMsg = greetingService.generateGreeting();
+            System.out.println("[GREETING GENERATED]");
+            
             state.appendMessage("assistant", greetMsg);
-            return new VoiceResponse(transcription, greetMsg, textToSpeechService.synthesizeSpeech(greetMsg), false, state.getSessionId());
+            
+            String formattedGreet = speechTextFormatter.formatForHindiTts(greetMsg);
+            System.out.println("[PERF] Sarvam TTS request started");
+            long ttsStart = System.currentTimeMillis();
+            String audioBase64 = textToSpeechService.synthesizeSpeech(formattedGreet);
+            ttsDuration = System.currentTimeMillis() - ttsStart;
+            System.out.println("[PERF] Sarvam TTS response received in " + ttsDuration + " ms");
+            
+            System.out.println("[GREETING TTS GENERATED]");
+            
+            long totalDuration = System.currentTimeMillis() - requestStart;
+            System.out.println("[PERF] Total request duration = " + totalDuration + " ms");
+            
+            System.out.println("[PERF] STT = " + sttDuration + " ms");
+            System.out.println("[PERF] RULE_ENGINE = " + ruleDuration + " ms");
+            System.out.println("[PERF] LLM = " + (llmDuration + nlgDuration) + " ms");
+            System.out.println("[PERF] TTS = " + ttsDuration + " ms");
+            System.out.println("[PERF] TOTAL = " + totalDuration + " ms");
+            
+            return new VoiceResponse(transcription, greetMsg, audioBase64, false, state.getSessionId());
         }
 
-        // 4. Input validation
+        // 3. Transcription empty check for subsequent turns
+        if (transcription == null || transcription.trim().isEmpty()) {
+            String fallbackMsg = "मुझे आपकी आवाज़ सुनाई नहीं दी। कृपया फिर से प्रयास करें।";
+            String formattedFallback = speechTextFormatter.formatForHindiTts(fallbackMsg);
+            
+            System.out.println("[PERF] Sarvam TTS request started");
+            long ttsStart = System.currentTimeMillis();
+            String audioBase64 = textToSpeechService.synthesizeSpeech(formattedFallback);
+            ttsDuration = System.currentTimeMillis() - ttsStart;
+            System.out.println("[PERF] Sarvam TTS response received in " + ttsDuration + " ms");
+            
+            long totalDuration = System.currentTimeMillis() - requestStart;
+            System.out.println("[PERF] Total request duration = " + totalDuration + " ms");
+            
+            System.out.println("[PERF] STT = " + sttDuration + " ms");
+            System.out.println("[PERF] RULE_ENGINE = " + ruleDuration + " ms");
+            System.out.println("[PERF] LLM = " + (llmDuration + nlgDuration) + " ms");
+            System.out.println("[PERF] TTS = " + ttsDuration + " ms");
+            System.out.println("[PERF] TOTAL = " + totalDuration + " ms");
+            
+            return new VoiceResponse("", fallbackMsg, audioBase64, false, state.getSessionId());
+        }
+
+        // 4. Normalization and basic setup
+        String cleanText = transcription.replaceAll("[।.,!?\\s]+", "").trim();
+        String cTextCheck = transcription.toLowerCase().trim();
+        boolean hasNegation = cTextCheck.contains("नहीं") || cTextCheck.contains("मत") || cTextCheck.contains("ना ");
+
+        // 5. Input validation
         if (!inputValidatorService.isValidInput(transcription, state.getLastAskedField())) {
             String errorMsg = "माफ़ कीजिए, मुझे समझ नहीं आया। क्या आप फिर से बता सकते हैं?";
+            String formattedError = speechTextFormatter.formatForHindiTts(errorMsg);
             state.appendMessage("assistant", errorMsg);
-            return new VoiceResponse(transcription, errorMsg, textToSpeechService.synthesizeSpeech(errorMsg), false, state.getSessionId());
+            
+            System.out.println("[PERF] Sarvam TTS request started");
+            long ttsStart = System.currentTimeMillis();
+            String audioBase64 = textToSpeechService.synthesizeSpeech(formattedError);
+            ttsDuration = System.currentTimeMillis() - ttsStart;
+            System.out.println("[PERF] Sarvam TTS response received in " + ttsDuration + " ms");
+            
+            long totalDuration = System.currentTimeMillis() - requestStart;
+            System.out.println("[PERF] Total request duration = " + totalDuration + " ms");
+            
+            System.out.println("[PERF] STT = " + sttDuration + " ms");
+            System.out.println("[PERF] RULE_ENGINE = " + ruleDuration + " ms");
+            System.out.println("[PERF] LLM = " + (llmDuration + nlgDuration) + " ms");
+            System.out.println("[PERF] TTS = " + ttsDuration + " ms");
+            System.out.println("[PERF] TOTAL = " + totalDuration + " ms");
+            
+            return new VoiceResponse(transcription, errorMsg, audioBase64, false, state.getSessionId());
         }
 
         state.appendMessage("user", transcription);
 
-        // 5. Deterministic rule-based extraction (Rule Engine Fast Path)
+        // 6. Deterministic rule-based extraction (Rule Engine Fast Path)
+        System.out.println("[PERF] Rule engine execution started");
+        long ruleStart = System.currentTimeMillis();
         String detName = null;
         String detDept = departmentParserService.parseDepartment(transcription);
         String detDate = dateParserService.parseDate(transcription);
@@ -159,23 +264,31 @@ public class ConversationOrchestrator {
             ruleSuccess = true;
         } else if ("time".equals(state.getLastAskedField()) && detTime != null) {
             ruleSuccess = true;
-        } else if (state.getStage() == ConversationStage.CONFIRMATION && ("CONTINUE".equals(ruleIntent) || "CANCEL".equals(ruleIntent) || "RESCHEDULE".equals(ruleIntent))) {
+        } else if (state.getStage() == ConversationStage.CONFIRMATION) {
+            // Confirmation stage bypasses LLM
             ruleSuccess = true;
-        } else if (state.getStage() == ConversationStage.POST_CONFIRM && ("RESCHEDULE".equals(ruleIntent) || "END".equals(ruleIntent) || "ASK_QUERY".equals(ruleIntent))) {
+        } else if (state.getStage() == ConversationStage.POST_CONFIRM) {
+            // Post confirmation bypasses LLM
             ruleSuccess = true;
         }
+        ruleDuration = System.currentTimeMillis() - ruleStart;
+        System.out.println("[PERF] Rule engine execution completed in " + ruleDuration + " ms");
 
         LlmExtractionResponse extracted = new LlmExtractionResponse();
         extracted.setIntent(ruleIntent);
         
-        // 6. Hybrid AI Strategy - Fallback to Groq only if deterministic rules are insufficient
+        // 7. Hybrid AI Strategy - Fallback to Groq only if deterministic rules are insufficient
         if (!ruleSuccess) {
             System.out.println("[LOG] Rule engine failed to parse expected field or intent. Invoking Groq extraction...");
+            System.out.println("[PERF] Intent and entity extraction started");
+            long llmStart = System.currentTimeMillis();
             String dateContext = dateNormalizerService.getDateContext(transcription);
             extracted = entityExtractionService.extractEntities(transcription, dateContext, state);
             if (extracted.getIntent() == null || extracted.getIntent().equals("UNCLEAR")) {
                 extracted.setIntent(ruleIntent);
             }
+            llmDuration = System.currentTimeMillis() - llmStart;
+            System.out.println("[PERF] Intent and entity extraction completed in " + llmDuration + " ms");
         } else {
             System.out.println("[LOG] Rule engine match successful. Bypassing Groq extraction.");
             extracted.setName(detName);
@@ -193,10 +306,27 @@ public class ConversationOrchestrator {
                 && (extracted.getIsQuerying() == null || !extracted.getIsQuerying())) {
             String oosMsg = "माफ़ कीजिए, मैं सिर्फ अपॉइंटमेंट बुकिंग में आपकी मदद कर सकती हूँ।";
             state.appendMessage("assistant", oosMsg);
-            return new VoiceResponse(transcription, oosMsg, textToSpeechService.synthesizeSpeech(oosMsg), false, state.getSessionId());
+            
+            String formattedOos = speechTextFormatter.formatForHindiTts(oosMsg);
+            System.out.println("[PERF] Sarvam TTS request started");
+            long ttsStart = System.currentTimeMillis();
+            String audioBase64 = textToSpeechService.synthesizeSpeech(formattedOos);
+            ttsDuration = System.currentTimeMillis() - ttsStart;
+            System.out.println("[PERF] Sarvam TTS response received in " + ttsDuration + " ms");
+            
+            long totalDuration = System.currentTimeMillis() - requestStart;
+            System.out.println("[PERF] Total request duration = " + totalDuration + " ms");
+            
+            System.out.println("[PERF] STT = " + sttDuration + " ms");
+            System.out.println("[PERF] RULE_ENGINE = " + ruleDuration + " ms");
+            System.out.println("[PERF] LLM = " + (llmDuration + nlgDuration) + " ms");
+            System.out.println("[PERF] TTS = " + ttsDuration + " ms");
+            System.out.println("[PERF] TOTAL = " + totalDuration + " ms");
+            
+            return new VoiceResponse(transcription, oosMsg, audioBase64, false, state.getSessionId());
         }
 
-        // 7. Process intents and slot filling
+        // 8. Process intents and slot filling
         String intent = intentClassifierService.classifyIntent(transcription, state, extracted.getIntent());
         System.out.println("[LOG] Final Intent: " + intent);
 
@@ -211,7 +341,24 @@ public class ConversationOrchestrator {
             state.resetRepeatCount();
             String reschMsg = "ठीक है, आप किस दिन अपॉइंटमेंट रखना चाहेंगे?";
             state.appendMessage("assistant", reschMsg);
-            return new VoiceResponse(transcription, reschMsg, textToSpeechService.synthesizeSpeech(reschMsg), false, state.getSessionId());
+            
+            String formattedResch = speechTextFormatter.formatForHindiTts(reschMsg);
+            System.out.println("[PERF] Sarvam TTS request started");
+            long ttsStart = System.currentTimeMillis();
+            String audioBase64 = textToSpeechService.synthesizeSpeech(formattedResch);
+            ttsDuration = System.currentTimeMillis() - ttsStart;
+            System.out.println("[PERF] Sarvam TTS response received in " + ttsDuration + " ms");
+            
+            long totalDuration = System.currentTimeMillis() - requestStart;
+            System.out.println("[PERF] Total request duration = " + totalDuration + " ms");
+            
+            System.out.println("[PERF] STT = " + sttDuration + " ms");
+            System.out.println("[PERF] RULE_ENGINE = " + ruleDuration + " ms");
+            System.out.println("[PERF] LLM = " + (llmDuration + nlgDuration) + " ms");
+            System.out.println("[PERF] TTS = " + ttsDuration + " ms");
+            System.out.println("[PERF] TOTAL = " + totalDuration + " ms");
+            
+            return new VoiceResponse(transcription, reschMsg, audioBase64, false, state.getSessionId());
         }
 
         // Cancel trigger
@@ -226,7 +373,24 @@ public class ConversationOrchestrator {
             state.setLastAskedField("name");
             String cancelMsg = "ठीक है, अपॉइंटमेंट कैंसिल कर दी गई है।";
             state.appendMessage("assistant", cancelMsg);
-            return new VoiceResponse(transcription, cancelMsg, textToSpeechService.synthesizeSpeech(cancelMsg), false, state.getSessionId());
+            
+            String formattedCancel = speechTextFormatter.formatForHindiTts(cancelMsg);
+            System.out.println("[PERF] Sarvam TTS request started");
+            long ttsStart = System.currentTimeMillis();
+            String audioBase64 = textToSpeechService.synthesizeSpeech(formattedCancel);
+            ttsDuration = System.currentTimeMillis() - ttsStart;
+            System.out.println("[PERF] Sarvam TTS response received in " + ttsDuration + " ms");
+            
+            long totalDuration = System.currentTimeMillis() - requestStart;
+            System.out.println("[PERF] Total request duration = " + totalDuration + " ms");
+            
+            System.out.println("[PERF] STT = " + sttDuration + " ms");
+            System.out.println("[PERF] RULE_ENGINE = " + ruleDuration + " ms");
+            System.out.println("[PERF] LLM = " + (llmDuration + nlgDuration) + " ms");
+            System.out.println("[PERF] TTS = " + ttsDuration + " ms");
+            System.out.println("[PERF] TOTAL = " + totalDuration + " ms");
+            
+            return new VoiceResponse(transcription, cancelMsg, audioBase64, false, state.getSessionId());
         }
 
         // End trigger
@@ -234,7 +398,24 @@ public class ConversationOrchestrator {
             String endMsg = "धन्यवाद। आपका दिन शुभ हो।";
             state.appendMessage("assistant", endMsg);
             state.setStage(ConversationStage.COMPLETED);
-            return new VoiceResponse(transcription, endMsg, textToSpeechService.synthesizeSpeech(endMsg), true, state.getSessionId());
+            
+            String formattedEnd = speechTextFormatter.formatForHindiTts(endMsg);
+            System.out.println("[PERF] Sarvam TTS request started");
+            long ttsStart = System.currentTimeMillis();
+            String audioBase64 = textToSpeechService.synthesizeSpeech(formattedEnd);
+            ttsDuration = System.currentTimeMillis() - ttsStart;
+            System.out.println("[PERF] Sarvam TTS response received in " + ttsDuration + " ms");
+            
+            long totalDuration = System.currentTimeMillis() - requestStart;
+            System.out.println("[PERF] Total request duration = " + totalDuration + " ms");
+            
+            System.out.println("[PERF] STT = " + sttDuration + " ms");
+            System.out.println("[PERF] RULE_ENGINE = " + ruleDuration + " ms");
+            System.out.println("[PERF] LLM = " + (llmDuration + nlgDuration) + " ms");
+            System.out.println("[PERF] TTS = " + ttsDuration + " ms");
+            System.out.println("[PERF] TOTAL = " + totalDuration + " ms");
+            
+            return new VoiceResponse(transcription, endMsg, audioBase64, true, state.getSessionId());
         }
 
         // Query resolutions in post-confirmation
@@ -243,17 +424,55 @@ public class ConversationOrchestrator {
                     cTextCheck, state.getDate(), state.getTime(), state.getDepartment(), state.getAssignedDoctor());
             if (answer != null) {
                 state.appendMessage("assistant", answer);
-                return new VoiceResponse(transcription, answer, textToSpeechService.synthesizeSpeech(answer), false, state.getSessionId());
+                
+                String formattedAnswer = speechTextFormatter.formatForHindiTts(answer);
+                System.out.println("[PERF] Sarvam TTS request started");
+                long ttsStart = System.currentTimeMillis();
+                String audioBase64 = textToSpeechService.synthesizeSpeech(formattedAnswer);
+                ttsDuration = System.currentTimeMillis() - ttsStart;
+                System.out.println("[PERF] Sarvam TTS response received in " + ttsDuration + " ms");
+                
+                long totalDuration = System.currentTimeMillis() - requestStart;
+                System.out.println("[PERF] Total request duration = " + totalDuration + " ms");
+                
+                System.out.println("[PERF] STT = " + sttDuration + " ms");
+                System.out.println("[PERF] RULE_ENGINE = " + ruleDuration + " ms");
+                System.out.println("[PERF] LLM = " + (llmDuration + nlgDuration) + " ms");
+                System.out.println("[PERF] TTS = " + ttsDuration + " ms");
+                System.out.println("[PERF] TOTAL = " + totalDuration + " ms");
+                
+                return new VoiceResponse(transcription, answer, audioBase64, false, state.getSessionId());
             }
         }
 
         if ("ASK_QUERY".equals(intent) && state.isConfirmed()) {
-            String dH = responseBuilder.toHindiDay(doctorAssignmentService.getDayOfWeek(state.getDate()));
+            long docMatchStart = System.currentTimeMillis();
+            String dayVal = doctorAssignmentService.getDayOfWeek(state.getDate());
+            System.out.println("[PERF] Doctor matching completed in " + (System.currentTimeMillis() - docMatchStart) + " ms");
+            
+            String dH = responseBuilder.toHindiDay(dayVal);
             String tN = responseBuilder.toNaturalTime(state.getTime());
             String dN = responseBuilder.formatDoctorName(state.getAssignedDoctor());
             String aiResponse = "आपका अपॉइंटमेंट " + dH + " को " + tN + " " + dN + " के साथ है।";
             state.appendMessage("assistant", aiResponse);
-            return new VoiceResponse(transcription, aiResponse, textToSpeechService.synthesizeSpeech(aiResponse), false, state.getSessionId());
+            
+            String formattedQueryResponse = speechTextFormatter.formatForHindiTts(aiResponse);
+            System.out.println("[PERF] Sarvam TTS request started");
+            long ttsStart = System.currentTimeMillis();
+            String audioBase64 = textToSpeechService.synthesizeSpeech(formattedQueryResponse);
+            ttsDuration = System.currentTimeMillis() - ttsStart;
+            System.out.println("[PERF] Sarvam TTS response received in " + ttsDuration + " ms");
+            
+            long totalDuration = System.currentTimeMillis() - requestStart;
+            System.out.println("[PERF] Total request duration = " + totalDuration + " ms");
+            
+            System.out.println("[PERF] STT = " + sttDuration + " ms");
+            System.out.println("[PERF] RULE_ENGINE = " + ruleDuration + " ms");
+            System.out.println("[PERF] LLM = " + (llmDuration + nlgDuration) + " ms");
+            System.out.println("[PERF] TTS = " + ttsDuration + " ms");
+            System.out.println("[PERF] TOTAL = " + totalDuration + " ms");
+            
+            return new VoiceResponse(transcription, aiResponse, audioBase64, false, state.getSessionId());
         }
 
         // Slot filling & validation execution
@@ -274,7 +493,9 @@ public class ConversationOrchestrator {
                     || state.getStage() == ConversationStage.RESCHEDULE || state.getStage() == ConversationStage.WELCOME) {
                 state.setStage(ConversationStage.CONFIRMATION);
                 if (state.getAssignedDoctor() == null) {
+                    long docMatchStart = System.currentTimeMillis();
                     state.setAssignedDoctor(doctorAssignmentService.matchDoctor(state.getDepartment(), state.getDate()));
+                    System.out.println("[PERF] Doctor matching completed in " + (System.currentTimeMillis() - docMatchStart) + " ms");
                 }
             }
         }
@@ -318,7 +539,11 @@ public class ConversationOrchestrator {
         } else if ("ASK_QUERY".equals(intent) || (extracted.getIsQuerying() != null && extracted.getIsQuerying())) {
             nextAction = "INFORM";
             if (state.isConfirmed() || state.getStage() == ConversationStage.CONFIRMATION) {
-                String dH = responseBuilder.toHindiDay(doctorAssignmentService.getDayOfWeek(state.getDate()));
+                long docMatchStart = System.currentTimeMillis();
+                String dayVal = doctorAssignmentService.getDayOfWeek(state.getDate());
+                System.out.println("[PERF] Doctor matching completed in " + (System.currentTimeMillis() - docMatchStart) + " ms");
+                
+                String dH = responseBuilder.toHindiDay(dayVal);
                 String tN = responseBuilder.toNaturalTime(state.getTime());
                 String dN = responseBuilder.formatDoctorName(state.getAssignedDoctor());
                 systemData = "आपका अपॉइंटमेंट " + dH + " को " + tN + " " + dN + " के साथ है।";
@@ -375,7 +600,7 @@ public class ConversationOrchestrator {
             nextAction = "POST_CONFIRM";
         }
 
-        // 9. Generate final response
+        // 10. Generate final response
         String aiResponse;
         switch (nextAction) {
             case "ASK_NAME"         -> aiResponse = "कृपया अपना नाम बताइए।";
@@ -399,7 +624,11 @@ public class ConversationOrchestrator {
             case "MULTI_DATE"        -> aiResponse = "आपने दो तारीखें बताई हैं। कृपया एक तारीख़ चुनें।";
             case "INFORM"           -> aiResponse = systemData;
             case "CONFIRM_DETAILS"  -> {
-                String dayH  = responseBuilder.toHindiDay(doctorAssignmentService.getDayOfWeek(state.getDate()));
+                long docMatchStart = System.currentTimeMillis();
+                String dayVal = doctorAssignmentService.getDayOfWeek(state.getDate());
+                System.out.println("[PERF] Doctor matching completed in " + (System.currentTimeMillis() - docMatchStart) + " ms");
+                
+                String dayH  = responseBuilder.toHindiDay(dayVal);
                 String dateH = responseBuilder.toHindiDate(state.getDate());
                 String timeN = responseBuilder.toNaturalTime(state.getTime());
                 String docN  = responseBuilder.formatDoctorName(state.getAssignedDoctor());
@@ -424,7 +653,11 @@ public class ConversationOrchestrator {
                 sb.append("NEXT ACTION:\n");
                 sb.append(nextAction).append("\n");
 
+                System.out.println("[PERF] Response generation started");
+                long nlgStart = System.currentTimeMillis();
                 aiResponse = responseGenerationService.generateResponse(sb.toString());
+                nlgDuration = System.currentTimeMillis() - nlgStart;
+                System.out.println("[PERF] Response generation completed in " + nlgDuration + " ms");
             }
         }
 
