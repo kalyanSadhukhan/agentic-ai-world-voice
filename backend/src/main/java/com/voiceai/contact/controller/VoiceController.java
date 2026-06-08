@@ -20,7 +20,7 @@ public class VoiceController {
 
     @PostMapping
     public ResponseEntity<?> handleVoice(
-            @RequestParam("audio") MultipartFile audio,
+            @RequestParam(value = "audio", required = false) MultipartFile audio,
             @RequestParam(value = "sessionId", required = false) String sessionId) {
         try {
             VoiceResponse response = voiceService.processVoice(audio, sessionId);

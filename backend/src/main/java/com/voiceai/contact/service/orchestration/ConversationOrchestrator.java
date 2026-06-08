@@ -103,21 +103,23 @@ public class ConversationOrchestrator {
         }
 
         // 1. Transcription (STT)
-        System.out.println("[PERF] Sarvam STT request started");
-        long sttStart = System.currentTimeMillis();
-        String transcription;
-        try {
-            transcription = speechToTextService.transcribeAudio(audio);
-        } catch (Exception e) {
-            System.err.println("Failed STT: " + e.getMessage());
-            transcription = "नमस्ते, यह एक टेस्ट है।";
-        }
-        sttDuration = System.currentTimeMillis() - sttStart;
-        System.out.println("[PERF] Sarvam STT response received in " + sttDuration + " ms");
+        String transcription = null;
+        if (audio != null && !audio.isEmpty()) {
+            System.out.println("[PERF] Sarvam STT request started");
+            long sttStart = System.currentTimeMillis();
+            try {
+                transcription = speechToTextService.transcribeAudio(audio);
+            } catch (Exception e) {
+                System.err.println("Failed STT: " + e.getMessage());
+                transcription = "नमस्ते, यह एक टेस्ट है।";
+            }
+            sttDuration = System.currentTimeMillis() - sttStart;
+            System.out.println("[PERF] Sarvam STT response received in " + sttDuration + " ms");
 
-        // Normalize transcription if present
-        if (transcription != null) {
-            transcription = ConversationUtils.normalizeTranscription(transcription);
+            // Normalize transcription if present
+            if (transcription != null) {
+                transcription = ConversationUtils.normalizeTranscription(transcription);
+            }
         }
 
         // 2. Greeting check - must run first on new sessions to prevent empty audio bypassing the welcome greeting

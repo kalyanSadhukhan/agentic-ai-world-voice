@@ -36,7 +36,93 @@ const VoiceDemoModal = ({ onClose }: VoiceDemoModalProps) => {
   // Setup loop
   const startInteraction = async () => {
     isContinuousRef.current = true;
-    startRecording();
+    setMessages([]);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach(track => track.stop());
+      fetchGreeting();
+    } catch (error) {
+      console.error("Mic error:", error);
+      setState("ERROR");
+      setErrorMsg("Microphone access denied. Please allow access to use the continuous demo.");
+      isContinuousRef.current = false;
+    }
+  };
+
+  const fetchGreeting = async () => {
+    setState("PROCESSING");
+    
+    try {
+      const formData = new FormData();
+      if (sessionIdRef.current) {
+          formData.append("sessionId", sessionIdRef.current);
+      }
+      
+      const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8081';
+      const response = await fetch(`${apiBase}/api/voice`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to process request");
+      }
+
+      const data = await response.json();
+      
+      if (data.sessionId) {
+          sessionIdRef.current = data.sessionId;
+      }
+
+      let currentTurnMessages: {role: string, content: string}[] = [];
+      
+      if (data.text) {
+        currentTurnMessages.push({role: "assistant", content: data.text});
+        setMessages(currentTurnMessages);
+      }
+      
+      if (!isContinuousRef.current) return;
+
+      if (data.audio) {
+        setState("RESPONDING");
+        try {
+          const audio = new Audio("data:audio/wav;base64," + data.audio);
+          audioPlaybackRef.current = audio;
+          audio.onended = () => {
+            // Automatically loop back to recording once finished
+            if (isContinuousRef.current) {
+                if (data.endCall) {
+                    setTimeout(() => stopInteraction(), 1000); // Small delay to let user absorb
+                } else {
+                    startRecording();
+                }
+            }
+          };
+          await audio.play();
+        } catch (playError) {
+          console.error("Audio play error", playError);
+          // If playback fails, keep going loop
+          if (isContinuousRef.current) {
+              if (data.endCall) stopInteraction();
+              else startRecording();
+          }
+        }
+      } else {
+        // No audio returned, jump back to listening
+        if (isContinuousRef.current) {
+            if (data.endCall) stopInteraction();
+            else startRecording();
+        }
+      }
+      
+    } catch (error) {
+      console.error("API error:", error);
+      if (isContinuousRef.current) {
+          setState("ERROR");
+          setErrorMsg("Failed to connect to the Voice API. Backend may be unreachable.");
+          stopInteraction();
+      }
+    }
   };
 
   const startRecording = async () => {
