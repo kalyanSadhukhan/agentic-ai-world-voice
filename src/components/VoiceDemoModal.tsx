@@ -53,15 +53,15 @@ const VoiceDemoModal = ({ onClose }: VoiceDemoModalProps) => {
     setState("PROCESSING");
     
     try {
-      const formData = new FormData();
-      if (sessionIdRef.current) {
-          formData.append("sessionId", sessionIdRef.current);
-      }
+      const payload = sessionIdRef.current ? { sessionId: sessionIdRef.current } : {};
       
       const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8081';
-      const response = await fetch(`${apiBase}/api/voice`, {
+      const response = await fetch(`${apiBase}/conversation/start`, {
         method: "POST",
-        body: formData,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
@@ -75,23 +75,25 @@ const VoiceDemoModal = ({ onClose }: VoiceDemoModalProps) => {
       }
 
       let currentTurnMessages: {role: string, content: string}[] = [];
+      const messageText = data.message || data.text;
+      const audioData = data.audioBase64 || data.audio;
       
-      if (data.text) {
-        currentTurnMessages.push({role: "assistant", content: data.text});
+      if (messageText) {
+        currentTurnMessages.push({role: "assistant", content: messageText});
         setMessages(currentTurnMessages);
       }
       
       if (!isContinuousRef.current) return;
 
-      if (data.audio) {
+      if (audioData) {
         setState("RESPONDING");
         try {
-          const audio = new Audio("data:audio/wav;base64," + data.audio);
+          const audio = new Audio("data:audio/wav;base64," + audioData);
           audioPlaybackRef.current = audio;
           audio.onended = () => {
             // Automatically loop back to recording once finished
             if (isContinuousRef.current) {
-                if (data.endCall) {
+                if (data.endCall || data.conversationActive === false) {
                     setTimeout(() => stopInteraction(), 1000); // Small delay to let user absorb
                 } else {
                     startRecording();
@@ -103,14 +105,14 @@ const VoiceDemoModal = ({ onClose }: VoiceDemoModalProps) => {
           console.error("Audio play error", playError);
           // If playback fails, keep going loop
           if (isContinuousRef.current) {
-              if (data.endCall) stopInteraction();
+              if (data.endCall || data.conversationActive === false) stopInteraction();
               else startRecording();
           }
         }
       } else {
         // No audio returned, jump back to listening
         if (isContinuousRef.current) {
-            if (data.endCall) stopInteraction();
+            if (data.endCall || data.conversationActive === false) stopInteraction();
             else startRecording();
         }
       }
@@ -295,7 +297,7 @@ const VoiceDemoModal = ({ onClose }: VoiceDemoModalProps) => {
           audio.onended = () => {
             // Automatically loop back to recording once finished
             if (isContinuousRef.current) {
-                if (data.endCall) {
+                if (data.endCall || data.conversationActive === false) {
                     setTimeout(() => stopInteraction(), 1000); // Small delay to let user absorb
                 } else {
                     startRecording();
@@ -307,14 +309,14 @@ const VoiceDemoModal = ({ onClose }: VoiceDemoModalProps) => {
           console.error("Audio play error", playError);
           // If playback fails, keep going loop
           if (isContinuousRef.current) {
-              if (data.endCall) stopInteraction();
+              if (data.endCall || data.conversationActive === false) stopInteraction();
               else startRecording();
           }
         }
       } else {
         // No audio returned, jump back to listening
         if (isContinuousRef.current) {
-            if (data.endCall) stopInteraction();
+            if (data.endCall || data.conversationActive === false) stopInteraction();
             else startRecording();
         }
       }

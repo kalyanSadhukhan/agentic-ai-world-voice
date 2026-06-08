@@ -6,6 +6,8 @@ public class VoiceResponse {
     private String audio;
     private boolean endCall;
     private String sessionId;
+    private boolean conversationActive = true;
+    private boolean waitingForUserInput = false;
 
     public VoiceResponse() {}
 
@@ -51,4 +53,10 @@ public class VoiceResponse {
 
     public String getSessionId() { return sessionId; }
     public void setSessionId(String sessionId) { this.sessionId = sessionId; }
+
+    public boolean isConversationActive() { return conversationActive; }
+    public void setConversationActive(boolean conversationActive) { this.conversationActive = conversationActive; }
+
+    public boolean isWaitingForUserInput() { return waitingForUserInput; }
+    public void setWaitingForUserInput(boolean waitingForUserInput) { this.waitingForUserInput = waitingForUserInput; }
 }

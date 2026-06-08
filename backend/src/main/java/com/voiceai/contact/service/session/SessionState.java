@@ -15,6 +15,9 @@ public class SessionState {
     private String assignedDoctor;
     private boolean confirmed;
     private boolean greetingDone;
+    private boolean conversationActive = true;
+    private boolean welcomeDelivered = false;
+    private boolean endCall = false;
     private String lastAskedField;
     private int repeatCount;
     private ConversationStage stage;
@@ -25,6 +28,11 @@ public class SessionState {
         this.stage = ConversationStage.WELCOME;
         this.messageHistory = new ArrayList<>();
         this.greetingDone = false;
+        this.conversationActive = true;
+        this.welcomeDelivered = false;
+        this.confirmed = false;
+        this.endCall = false;
+        this.lastAskedField = null;
         this.repeatCount = 0;
     }
 
@@ -75,4 +83,13 @@ public class SessionState {
         msg.put("content", content);
         this.messageHistory.add(msg);
     }
+
+    public boolean isConversationActive() { return conversationActive; }
+    public void setConversationActive(boolean conversationActive) { this.conversationActive = conversationActive; }
+
+    public boolean isWelcomeDelivered() { return welcomeDelivered; }
+    public void setWelcomeDelivered(boolean welcomeDelivered) { this.welcomeDelivered = welcomeDelivered; }
+
+    public boolean isEndCall() { return endCall; }
+    public void setEndCall(boolean endCall) { this.endCall = endCall; }
 }

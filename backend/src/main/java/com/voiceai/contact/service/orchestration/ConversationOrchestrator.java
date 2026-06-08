@@ -98,6 +98,8 @@ public class ConversationOrchestrator {
         long ttsDuration = 0;
 
         SessionState state = sessionManagerService.getOrCreateSession(sessionId);
+        System.out.println("[SESSION_STAGE] stage=" + state.getStage());
+
         if (sarvamApiKey == null || sarvamApiKey.isEmpty() || groqApiKey == null || groqApiKey.isEmpty()) {
             throw new Exception("API keys are missing in the environment configuration.");
         }
@@ -121,11 +123,13 @@ public class ConversationOrchestrator {
                 transcription = ConversationUtils.normalizeTranscription(transcription);
             }
         }
+        System.out.println("[VOICE_INPUT_RECEIVED] text=" + (transcription != null ? transcription : "[Silence or Empty]"));
 
         // 2. Greeting check - must run first on new sessions to prevent empty audio bypassing the welcome greeting
         if (!state.isGreetingDone()) {
             System.out.println("[NEW SESSION DETECTED]");
             state.setGreetingDone(true);
+            state.setWelcomeDelivered(true);
             state.appendMessage("user", transcription != null ? transcription : "");
             
             // Try to extract department deterministically from the first utterance
@@ -156,12 +160,17 @@ public class ConversationOrchestrator {
                 System.out.println("[PERF] TTS = " + ttsDuration + " ms");
                 System.out.println("[PERF] TOTAL = " + totalDuration + " ms");
                 
-                return new VoiceResponse(transcription, promptMsg, audioBase64, false, state.getSessionId());
+                System.out.println("[NEXT_STAGE] stage=" + state.getStage());
+                System.out.println("[END_CALL_FLAG] value=false");
+                VoiceResponse resp = new VoiceResponse(transcription, promptMsg, audioBase64, false, state.getSessionId());
+                resp.setConversationActive(true);
+                resp.setWaitingForUserInput(true);
+                return resp;
             }
 
             // Normal welcome greeting if no department provided
-            state.setStage(ConversationStage.COLLECT_NAME);
-            state.setLastAskedField("name");
+            state.setStage(ConversationStage.WELCOME);
+            state.setLastAskedField(null);
             
             String greetMsg = greetingService.generateGreeting();
             System.out.println("[GREETING GENERATED]");
@@ -186,11 +195,18 @@ public class ConversationOrchestrator {
             System.out.println("[PERF] TTS = " + ttsDuration + " ms");
             System.out.println("[PERF] TOTAL = " + totalDuration + " ms");
             
-            return new VoiceResponse(transcription, greetMsg, audioBase64, false, state.getSessionId());
+            System.out.println("[NEXT_STAGE] stage=" + state.getStage());
+            System.out.println("[END_CALL_FLAG] value=false");
+            VoiceResponse resp = new VoiceResponse(transcription, greetMsg, audioBase64, false, state.getSessionId());
+            resp.setConversationActive(true);
+            resp.setWaitingForUserInput(true);
+            return resp;
         }
 
         // 3. Transcription empty check for subsequent turns
         if (transcription == null || transcription.trim().isEmpty()) {
+            System.out.println("[INTENT_CLASSIFIED] intent=NONE");
+
             String fallbackMsg = "मुझे आपकी आवाज़ सुनाई नहीं दी। कृपया फिर से प्रयास करें।";
             String formattedFallback = speechTextFormatter.formatForHindiTts(fallbackMsg);
             
@@ -209,7 +225,12 @@ public class ConversationOrchestrator {
             System.out.println("[PERF] TTS = " + ttsDuration + " ms");
             System.out.println("[PERF] TOTAL = " + totalDuration + " ms");
             
-            return new VoiceResponse("", fallbackMsg, audioBase64, false, state.getSessionId());
+            System.out.println("[NEXT_STAGE] stage=" + state.getStage());
+            System.out.println("[END_CALL_FLAG] value=false");
+            VoiceResponse resp = new VoiceResponse("", fallbackMsg, audioBase64, false, state.getSessionId());
+            resp.setConversationActive(true);
+            resp.setWaitingForUserInput(true);
+            return resp;
         }
 
         // 4. Normalization and basic setup
@@ -238,7 +259,13 @@ public class ConversationOrchestrator {
             System.out.println("[PERF] TTS = " + ttsDuration + " ms");
             System.out.println("[PERF] TOTAL = " + totalDuration + " ms");
             
-            return new VoiceResponse(transcription, errorMsg, audioBase64, false, state.getSessionId());
+            System.out.println("[INTENT_CLASSIFIED] intent=INVALID_INPUT");
+            System.out.println("[NEXT_STAGE] stage=" + state.getStage());
+            System.out.println("[END_CALL_FLAG] value=false");
+            VoiceResponse resp = new VoiceResponse(transcription, errorMsg, audioBase64, false, state.getSessionId());
+            resp.setConversationActive(true);
+            resp.setWaitingForUserInput(true);
+            return resp;
         }
 
         state.appendMessage("user", transcription);
@@ -325,12 +352,19 @@ public class ConversationOrchestrator {
             System.out.println("[PERF] TTS = " + ttsDuration + " ms");
             System.out.println("[PERF] TOTAL = " + totalDuration + " ms");
             
-            return new VoiceResponse(transcription, oosMsg, audioBase64, false, state.getSessionId());
+            System.out.println("[INTENT_CLASSIFIED] intent=OUT_OF_SCOPE");
+            System.out.println("[NEXT_STAGE] stage=" + state.getStage());
+            System.out.println("[END_CALL_FLAG] value=false");
+            VoiceResponse resp = new VoiceResponse(transcription, oosMsg, audioBase64, false, state.getSessionId());
+            resp.setConversationActive(true);
+            resp.setWaitingForUserInput(true);
+            return resp;
         }
 
         // 8. Process intents and slot filling
         String intent = intentClassifierService.classifyIntent(transcription, state, extracted.getIntent());
         System.out.println("[LOG] Final Intent: " + intent);
+        System.out.println("[INTENT_CLASSIFIED] intent=" + intent);
 
         // Reschedule trigger
         if ("RESCHEDULE".equals(intent) && (state.isConfirmed() || state.getStage() == ConversationStage.POST_CONFIRM || state.getStage() == ConversationStage.CONFIRMATION)) {
@@ -360,7 +394,12 @@ public class ConversationOrchestrator {
             System.out.println("[PERF] TTS = " + ttsDuration + " ms");
             System.out.println("[PERF] TOTAL = " + totalDuration + " ms");
             
-            return new VoiceResponse(transcription, reschMsg, audioBase64, false, state.getSessionId());
+            System.out.println("[NEXT_STAGE] stage=" + state.getStage());
+            System.out.println("[END_CALL_FLAG] value=false");
+            VoiceResponse resp = new VoiceResponse(transcription, reschMsg, audioBase64, false, state.getSessionId());
+            resp.setConversationActive(true);
+            resp.setWaitingForUserInput(true);
+            return resp;
         }
 
         // Cancel trigger
@@ -392,7 +431,12 @@ public class ConversationOrchestrator {
             System.out.println("[PERF] TTS = " + ttsDuration + " ms");
             System.out.println("[PERF] TOTAL = " + totalDuration + " ms");
             
-            return new VoiceResponse(transcription, cancelMsg, audioBase64, false, state.getSessionId());
+            System.out.println("[NEXT_STAGE] stage=" + state.getStage());
+            System.out.println("[END_CALL_FLAG] value=false");
+            VoiceResponse resp = new VoiceResponse(transcription, cancelMsg, audioBase64, false, state.getSessionId());
+            resp.setConversationActive(true);
+            resp.setWaitingForUserInput(true);
+            return resp;
         }
 
         // End trigger
@@ -417,7 +461,12 @@ public class ConversationOrchestrator {
             System.out.println("[PERF] TTS = " + ttsDuration + " ms");
             System.out.println("[PERF] TOTAL = " + totalDuration + " ms");
             
-            return new VoiceResponse(transcription, endMsg, audioBase64, true, state.getSessionId());
+            System.out.println("[NEXT_STAGE] stage=" + state.getStage());
+            System.out.println("[END_CALL_FLAG] value=true");
+            VoiceResponse resp = new VoiceResponse(transcription, endMsg, audioBase64, true, state.getSessionId());
+            resp.setConversationActive(false);
+            resp.setWaitingForUserInput(false);
+            return resp;
         }
 
         // Query resolutions in post-confirmation
@@ -443,7 +492,12 @@ public class ConversationOrchestrator {
                 System.out.println("[PERF] TTS = " + ttsDuration + " ms");
                 System.out.println("[PERF] TOTAL = " + totalDuration + " ms");
                 
-                return new VoiceResponse(transcription, answer, audioBase64, false, state.getSessionId());
+                System.out.println("[NEXT_STAGE] stage=" + state.getStage());
+                System.out.println("[END_CALL_FLAG] value=false");
+                VoiceResponse resp = new VoiceResponse(transcription, answer, audioBase64, false, state.getSessionId());
+                resp.setConversationActive(true);
+                resp.setWaitingForUserInput(true);
+                return resp;
             }
         }
 
@@ -474,7 +528,12 @@ public class ConversationOrchestrator {
             System.out.println("[PERF] TTS = " + ttsDuration + " ms");
             System.out.println("[PERF] TOTAL = " + totalDuration + " ms");
             
-            return new VoiceResponse(transcription, aiResponse, audioBase64, false, state.getSessionId());
+            System.out.println("[NEXT_STAGE] stage=" + state.getStage());
+            System.out.println("[END_CALL_FLAG] value=false");
+            VoiceResponse resp = new VoiceResponse(transcription, aiResponse, audioBase64, false, state.getSessionId());
+            resp.setConversationActive(true);
+            resp.setWaitingForUserInput(true);
+            return resp;
         }
 
         // Slot filling & validation execution
@@ -672,6 +731,12 @@ public class ConversationOrchestrator {
             audioBase64 = "";
         }
 
-        return new VoiceResponse(transcription, aiResponse, audioBase64, endCall, state.getSessionId());
+        System.out.println("[NEXT_STAGE] stage=" + state.getStage());
+        System.out.println("[END_CALL_FLAG] value=" + endCall);
+
+        VoiceResponse resp = new VoiceResponse(transcription, aiResponse, audioBase64, endCall, state.getSessionId());
+        resp.setConversationActive(!endCall);
+        resp.setWaitingForUserInput(!endCall);
+        return resp;
     }
 }
